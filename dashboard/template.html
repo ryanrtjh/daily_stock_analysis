@@ -153,6 +153,7 @@ dialog::backdrop{background:rgba(0,0,0,.7)}
 const DATA = /*__DATA__*/null;
 const L = DATA.latest, H = DATA.history;
 const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const num = (v, d = 2) => v == null ? "–" : Number(v).toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d});
 const usd = v => v == null ? "–" : "$" + num(v);
@@ -248,8 +249,46 @@ function renderToday() {
 }
 
 function renderWatch() {
-  $("#s-watch").innerHTML = `<h2>All ${L.ideas.length} tickers</h2>` + L.ideas.map(i => card(i)).join("") +
-    `<div class="note" style="margin-top:8px">Edit the list: set <code>STOCK_LIST</code> in <code>.env</code> and rebuild.</div>`;
+  $("#s-watch").innerHTML = `<div class="row" id="wl-bar">
+      <input type="text" id="wl-sym" placeholder="Add ticker, e.g. AMD" maxlength="7" autocomplete="off" autocapitalize="characters" aria-label="Ticker to add">
+      <button class="btn" id="wl-add" style="white-space:nowrap">+ Add ticker</button></div>
+    <div class="note" id="wl-msg" role="status" style="margin:6px 0 0"></div>
+    <h2>All ${L.ideas.length} tickers</h2>` + L.ideas.map(i => card(i)).join("") +
+    `<div class="note" style="margin-top:8px" id="wl-foot"></div>`;
+  $("#s-watch").querySelectorAll("article.card").forEach(a => a.querySelector(".row").insertAdjacentHTML("beforeend",
+    `<button class="iconbtn wl-rm" data-code="${esc(a.dataset.code)}" title="Remove ${esc(a.dataset.code)}" aria-label="Remove ${esc(a.dataset.code)} from watchlist">✕</button>`));
+  wlWire();
+}
+
+async function wlCall(action, symbol) {
+  const msg = $("#wl-msg"), btns = $$("#s-watch button, #s-watch input");
+  msg.textContent = action === "add" ? `Checking ${symbol} and rebuilding… (5-15s)` : `Removing ${symbol} and rebuilding…`;
+  btns.forEach(b => b.disabled = true);
+  try {
+    const r = await fetch("/api/watchlist", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({action, symbol})});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "request failed");
+    location.hash = "#watch"; location.reload();
+  } catch (e) {
+    msg.textContent = "Couldn't " + action + " " + symbol + ": " + e.message;
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+async function wlWire() {
+  let live = false;
+  try { live = (await fetch("/api/watchlist", {cache: "no-store"})).ok; } catch {}
+  const bar = $("#wl-bar");
+  if (!bar) return;
+  if (!live) {
+    bar.style.display = "none"; $$("#s-watch .wl-rm").forEach(b => b.remove());
+    $("#wl-foot").innerHTML = "To add or remove tickers here, run <code>python dashboard/serve.py</code> and open the page from it. On a published copy, edit the <code>STOCK_LIST</code> secret instead.";
+    return;
+  }
+  const add = () => { const s = $("#wl-sym").value.trim().toUpperCase(); if (!s) return; wlCall("add", s); };
+  $("#wl-add").onclick = add;
+  $("#wl-sym").onkeydown = e => { if (e.key === "Enter") add(); };
+  $$("#s-watch .wl-rm").forEach(b => b.onclick = () => { if (confirm("Remove " + b.dataset.code + " from the watchlist?")) wlCall("remove", b.dataset.code); });
 }
 
 function renderHist() {
@@ -301,7 +340,7 @@ $("#tabs").onclick = e => { const b = e.target.closest("button"); if (b) show(b.
 function applyTheme() { if (S.theme === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = S.theme; }
 $("#gear").onclick = () => { $("#acct").value = S.acct ?? ""; $("#risk").value = S.risk ?? 1; $("#dlg").showModal(); };
 $("#dlg").addEventListener("close", () => { S.acct = parseFloat($("#acct").value) || null; S.risk = Math.min(5, Math.max(0.1, parseFloat($("#risk").value) || 1)); store.set("dsa.settings", S); applyTheme(); renderAll(); });
-applyTheme(); renderAll(); show((location.hash || "#today").slice(1).replace(/[^a-z]/g, "") in {today:1,watch:1,hist:1,bt:1,an:1} ? location.hash.slice(1) : "today");
+applyTheme(); renderAll(); show((location.hash || "#today").slice(1).replace(/[^a-z]/g, "") in {today:1,watch:1,hist:1,an:1} ? location.hash.slice(1) : "today");
 </script>
 </body>
 </html>

@@ -42,6 +42,7 @@ from dashboard import engine as E  # noqa: E402
 
 US_TICKER = re.compile(r"^[A-Z]{1,5}([.\-][A-Z])?$")
 MAX_HISTORY_DAYS = 250
+WATCHLIST_FILE = HERE / "watchlist.json"   # written by serve.py (Add/Remove ticker); overrides STOCK_LIST
 BACKFILL_DAYS = 25
 LLM_KEY_VARS = ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
                 "AIHUBMIX_KEY", "LITELLM_API_KEY", "MODELFLARE_KEY", "GEMINI_API_KEYS", "OPENAI_API_KEYS")
@@ -53,7 +54,13 @@ def log(msg: str) -> None:
 
 # ------------------------------------------------------------------ inputs
 def watchlist(arg: Optional[str]) -> List[str]:
-    raw = arg or os.getenv("STOCK_LIST", "")
+    raw = arg
+    if not raw and WATCHLIST_FILE.exists():
+        try:
+            raw = " ".join(json.loads(WATCHLIST_FILE.read_text(encoding="utf-8")))
+        except Exception:
+            log(f"could not read {WATCHLIST_FILE.name}; falling back to STOCK_LIST")
+    raw = raw or os.getenv("STOCK_LIST", "")
     out, seen = [], set()
     for tok in re.split(r"[,\s;]+", raw.upper()):
         if not tok or tok in seen:
@@ -187,7 +194,7 @@ def digest(snap: Dict[str, Any]) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stocks", help="comma list (default: STOCK_LIST from .env, US tickers only)")
+    ap.add_argument("--stocks", help="comma list (default: dashboard/watchlist.json if present, else STOCK_LIST from .env; US tickers only)")
     ap.add_argument("--ai", choices=["auto", "on", "off"], default="auto")
     ap.add_argument("--notify", action="store_true",
                     help="push the text digest to the channels configured in .env (Telegram/Discord/Slack/email/...)")

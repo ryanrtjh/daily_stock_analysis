@@ -92,3 +92,4 @@ docs/specs/
 
 # Personal watchlist dashboard output
 dashboard/site/
+dashboard/watchlist.json
