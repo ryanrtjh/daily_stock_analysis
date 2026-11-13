@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -44,6 +45,7 @@ US_TICKER = re.compile(r"^[A-Z]{1,5}([.\-][A-Z])?$")
 MAX_HISTORY_DAYS = 250
 WATCHLIST_FILE = HERE / "watchlist.json"   # written by serve.py (Add/Remove ticker); overrides STOCK_LIST
 BACKFILL_DAYS = 25
+CHART_BARS = 960          # daily bars embedded per ticker for the Charts tab: 3Y (756) + MA200 warm-up
 LLM_KEY_VARS = ("GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
                 "AIHUBMIX_KEY", "LITELLM_API_KEY", "MODELFLARE_KEY", "GEMINI_API_KEYS", "OPENAI_API_KEYS")
 
@@ -73,9 +75,174 @@ def watchlist(arg: Optional[str]) -> List[str]:
     return out
 
 
+def _num(x: Any, nd: int = 2) -> Optional[float]:
+    try:
+        v = float(x)
+        return round(v, nd) if math.isfinite(v) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _analyst_positioning(info: Dict[str, Any]) -> Dict[str, Any]:
+    """Analyst consensus/targets and short-interest/ownership from Yahoo's quote summary (None when Yahoo has no data, e.g. ETFs)."""
+    out: Dict[str, Any] = {"analyst": None, "positioning": None}
+    rec = info.get("recommendationKey")
+    a = {"rec": rec if rec and rec != "none" else None, "rec_mean": _num(info.get("recommendationMean")),
+         "n": info.get("numberOfAnalystOpinions"), "target_mean": _num(info.get("targetMeanPrice")),
+         "target_high": _num(info.get("targetHighPrice")), "target_low": _num(info.get("targetLowPrice"))}
+    if a["rec"] or a["target_mean"]:
+        out["analyst"] = a
+    spf, ss, ssp = info.get("shortPercentOfFloat"), _num(info.get("sharesShort"), 0), _num(info.get("sharesShortPriorMonth"), 0)
+    sdate = None
+    try:
+        if info.get("dateShortInterest"):
+            sdate = datetime.fromtimestamp(int(info["dateShortInterest"]), tz=timezone.utc).date().isoformat()
+    except (TypeError, ValueError, OSError):
+        pass
+    pos = {"short_pct_float": _num(spf * 100 if spf is not None else None, 2), "days_to_cover": _num(info.get("shortRatio")),
+           "short_chg_pct": _num((ss / ssp - 1) * 100, 1) if ss and ssp else None, "short_date": sdate,
+           "inst_pct": _num(info.get("heldPercentInstitutions") * 100 if info.get("heldPercentInstitutions") is not None else None, 1),
+           "insider_pct": _num(info.get("heldPercentInsiders") * 100 if info.get("heldPercentInsiders") is not None else None, 1)}
+    if any(pos[k] is not None for k in ("short_pct_float", "inst_pct", "insider_pct")):
+        out["positioning"] = pos
+    return out
+
+
+def fetch_macro() -> List[Dict[str, Any]]:
+    """VIX and the 10-year Treasury yield for the market header (Yahoo ^VIX, ^TNX; ^TNX is quoted in percent)."""
+    out: List[Dict[str, Any]] = []
+    try:
+        import yfinance as yf
+    except Exception:
+        return out
+    for sym, label, kind in (("^VIX", "VIX", "vol"), ("^TNX", "US 10Y", "yield")):
+        try:
+            h = yf.Ticker(sym).history(period="3mo")["Close"].dropna()
+            if len(h) < 2:
+                continue
+            px, prev = float(h.iloc[-1]), float(h.iloc[-2])
+            out.append({"code": label, "kind": kind, "price": round(px, 2), "chg": round(px - prev, 2),
+                        "chg_pct": round((px / prev - 1) * 100, 2), "spark": [round(float(x), 2) for x in h.iloc[-40:]]})
+        except Exception as e:
+            log(f"macro {sym} failed: {e}")
+    return out
+
+
+def _atm(chain: Any, spot: float) -> Optional[Dict[str, float]]:
+    """ATM implied vol (avg of call+put at the strike nearest spot) and the straddle price. None if quotes look unusable."""
+    calls, puts = chain.calls, chain.puts
+    common = sorted(set(calls["strike"]) & set(puts["strike"]), key=lambda k: abs(k - spot))
+    for k in common[:6]:
+        c, p = calls[calls["strike"] == k].iloc[0], puts[puts["strike"] == k].iloc[0]
+        ivs = [float(x) for x in (c["impliedVolatility"], p["impliedVolatility"]) if x and 0.03 < float(x) < 5]
+        if len(ivs) < 2:
+            continue
+
+        def mid(r: Any) -> float:   # bid/ask are 0 after hours: fall back to the last trade
+            b, a = float(r["bid"] or 0), float(r["ask"] or 0)
+            return (b + a) / 2 if b > 0 and a > 0 else float(r["lastPrice"] or 0)
+        m = mid(c) + mid(p)
+        if m > 0:
+            return {"iv": sum(ivs) / 2, "straddle": m, "strike": float(k)}
+    return None
+
+
+def earnings_moves(ed: Any, df: Any, limit: int = 8) -> List[Dict[str, Any]]:
+    """Actual close-to-close reaction to each past earnings report (after-close reports react next session)."""
+    moves: List[Dict[str, Any]] = []
+    if ed is None or len(ed) == 0:
+        return moves
+    dates = [str(x)[:10] for x in df["date"]]
+    closes = [float(x) for x in df["close"]]
+    today = date.today()
+    for ts, row in ed.iterrows():
+        try:
+            if ts.date() >= today or row.get("Reported EPS") != row.get("Reported EPS"):   # future, or not reported yet (NaN)
+                continue
+            rd = ts.date().isoformat()
+            if ts.hour >= 12:      # after the close: base = that day's close, reaction = next session
+                base = max((i for i, d in enumerate(dates) if d <= rd), default=None)
+                if base is None or base + 1 >= len(closes):
+                    continue
+                mv = closes[base + 1] / closes[base] - 1
+            else:                  # before the open: reaction = that session vs the previous close
+                nxt = next((i for i, d in enumerate(dates) if d >= rd), None)
+                if nxt is None or nxt == 0:
+                    continue
+                mv = closes[nxt] / closes[nxt - 1] - 1
+            moves.append({"date": rd, "move_pct": round(mv * 100, 1)})
+        except Exception:
+            continue
+    return moves[:limit]
+
+
+def fetch_options(code: str, df: Any, earnings_date: Optional[str]) -> Optional[Dict[str, Any]]:
+    """IV term structure + the implied move around the next earnings report, vs what past reports actually did."""
+    try:
+        import yfinance as yf
+        t = yf.Ticker(code)
+        exps = list(t.options or [])
+        if not exps:
+            return None
+        spot = float(df["close"].iloc[-1])
+        today = date.today()
+        try:
+            ed = t.get_earnings_dates(limit=14)
+        except Exception:
+            ed = None
+        est = False
+        if not earnings_date and ed is not None and len(ed):     # Yahoo's calendar has no confirmed date: use the projected one
+            fut = sorted(x.date().isoformat() for x in ed.index if x.date() > today)
+            if fut:
+                earnings_date, est = fut[0], True
+        dte = {e: (date.fromisoformat(e) - today).days for e in exps}
+        ok = [e for e in exps if dte[e] >= 2]
+        if not ok:
+            return None
+        pick = ok[:3]
+        pre = post = None
+        if earnings_date:
+            post = next((e for e in ok if e > earnings_date), None)    # strictly after: an after-close report reacts next session
+            pre = next((e for e in reversed(ok) if e < earnings_date), None)
+            pick += [e for e in (pre, post) if e]
+        pick += [e for e in ok if 30 <= dte[e] <= 220 and 15 <= int(e[8:10]) <= 21][:3]      # monthlies
+        pick = sorted(set(pick))[:9]
+        term = []
+        for e in pick:
+            a = _atm(t.option_chain(e), spot)
+            if a:
+                term.append({"exp": e, "dte": dte[e], "iv": round(a["iv"] * 100, 1), "move_pct": round(a["straddle"] / spot * 100, 1)})
+        if not term:
+            return None
+        by = {x["exp"]: x for x in term}
+        res: Dict[str, Any] = {"spot": round(spot, 2), "earnings_date": earnings_date,
+                               "earnings_days": (date.fromisoformat(earnings_date) - today).days if earnings_date else None,
+                               "earnings_est": est, "exp_pre": pre if pre in by else None, "exp_post": post if post in by else None,
+                               "iv_pre": by[pre]["iv"] if pre in by else None, "iv_post": by[post]["iv"] if post in by else None,
+                               "implied_move_pct": None, "move_quality": None, "term": term}
+        # Event-day move: the post-earnings expiry carries extra variance versus a base vol with no event in it.
+        # V_event = s_post^2*T_post - s_base^2*(T_post - 1 day);  expected |move| ~= 0.798*sqrt(V_event)
+        base = pre if pre in by else next((e for e in by if post and e > post), None)
+        if post in by and base:
+            tp, tb = dte[post] / 365.0, dte[base] / 365.0
+            sp, sb = by[post]["iv"] / 100.0, by[base]["iv"] / 100.0
+            ev = sp * sp * tp - sb * sb * (tp - 1 / 365.0)
+            if ev > 0:
+                res["implied_move_pct"] = round(0.798 * math.sqrt(ev) * 100, 1)
+                res["move_quality"] = "ok" if abs(dte[post] - dte[base]) <= 10 else "rough"   # far-apart expiries blur the event with the term structure
+        hist = earnings_moves(ed, df)
+        res["hist"] = hist
+        res["hist_avg_abs"] = round(sum(abs(h["move_pct"]) for h in hist) / len(hist), 1) if hist else None
+        return res
+    except Exception as e:
+        log(f"options {code} failed: {str(e)[:100]}")
+        return None
+
+
 def fetch_meta(code: str) -> Dict[str, Any]:
     """Company name, next earnings date and recent headlines from Yahoo (free)."""
-    meta: Dict[str, Any] = {"name": code, "sector": None, "earnings_date": None, "earnings_days": None, "news": []}
+    meta: Dict[str, Any] = {"name": code, "sector": None, "earnings_date": None, "earnings_days": None, "news": [],
+                            "analyst": None, "positioning": None}
     try:
         import yfinance as yf
         t = yf.Ticker(code)
@@ -83,6 +250,7 @@ def fetch_meta(code: str) -> Dict[str, Any]:
             info = t.get_info()
             meta["name"] = info.get("shortName") or info.get("longName") or code
             meta["sector"] = info.get("sector")
+            meta.update(_analyst_positioning(info))
         except Exception:
             pass
         try:
@@ -196,6 +364,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stocks", help="comma list (default: dashboard/watchlist.json if present, else STOCK_LIST from .env; US tickers only)")
     ap.add_argument("--ai", choices=["auto", "on", "off"], default="auto")
+    ap.add_argument("--no-options", action="store_true", help="skip option chains / implied-vol analysis (saves ~30s)")
     ap.add_argument("--notify", action="store_true",
                     help="push the text digest to the channels configured in .env (Telegram/Discord/Slack/email/...)")
     args = ap.parse_args()
@@ -229,6 +398,14 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=4) as ex:
         metas = dict(zip(codes, ex.map(fetch_meta, codes)))
 
+    options: Dict[str, Any] = {}
+    if not args.no_options:
+        t1 = time.time()
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            res = list(ex.map(lambda c: fetch_options(c, frames[c], metas[c].get("earnings_date")), codes))
+        options = {c: r for c, r in zip(codes, res) if r}
+        log(f"options for {len(options)}/{len(codes)} tickers ({time.time() - t1:.0f}s)")
+
     # --- current plans
     now = {c: E.analyse_now(c, frames[c], analyzer) for c in codes}
     spy = now.get("SPY") or E.analyse_now("SPY", frames["SPY"], analyzer)
@@ -236,6 +413,7 @@ def main() -> int:
     market = E.market_regime(spy, qqq)
     market["indices"] = [{"code": x["code"], "price": x["price"], "chg_pct": x["chg_pct"], "trend": x["trend"],
                           "spark": x["spark"], "spark_dates": x["spark_dates"]} for x in (spy, qqq) if x]
+    market["macro"] = fetch_macro()
     asof = spy["asof"]
 
     # --- history back-fill (replay the playbook over the last few bars)
@@ -273,7 +451,7 @@ def main() -> int:
     by_date = {h["date"]: h for h in history}
 
     def compact(i):   # drop heavy fields for stored history
-        return {k: v for k, v in i.items() if k not in ("spark", "spark_dates", "news", "levels")}
+        return {k: v for k, v in i.items() if k not in ("spark", "spark_dates", "news", "levels", "analyst", "positioning")}
 
     for d_, rows in backfill.items():
         if d_ == asof:
@@ -305,7 +483,20 @@ def main() -> int:
     (SITE / "data" / "latest.json").write_text(json.dumps(snap, indent=1, default=str), encoding="utf-8")
     (SITE / "digest.txt").write_text(digest(snap), encoding="utf-8")
 
-    payload = {"latest": snap, "history": history}
+    charts: Dict[str, List[List[Any]]] = {}
+    for c in codes:
+        d = frames[c].tail(CHART_BARS)
+        rows = []
+        for dt, o, h, l, cl, v in zip(d["date"], d["open"], d["high"], d["low"], d["close"], d["volume"]):
+            try:
+                vals = [float(o), float(h), float(l), float(cl), float(v or 0)]
+            except (TypeError, ValueError):
+                continue
+            if all(math.isfinite(x) for x in vals):
+                rows.append([str(dt)[:10], round(vals[0], 2), round(vals[1], 2), round(vals[2], 2), round(vals[3], 2), int(vals[4])])
+        charts[c] = rows
+
+    payload = {"latest": snap, "history": history, "charts": charts, "options": options}
     tpl = (HERE / "template.html").read_text(encoding="utf-8")
     blob = json.dumps(payload, separators=(",", ":"), default=str).replace("</", "<\\/")
     (SITE / "index.html").write_text(tpl.replace("/*__DATA__*/null", blob), encoding="utf-8")

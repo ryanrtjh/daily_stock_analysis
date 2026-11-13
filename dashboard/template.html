@@ -33,7 +33,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .iconbtn:hover,.chip:hover{background:var(--wash)}
 nav{position:fixed;bottom:0;left:0;right:0;z-index:6;background:var(--navy);border-top:2px solid var(--amber);
   padding-bottom:env(safe-area-inset-bottom)}
-nav .wrap{display:grid;grid-template-columns:repeat(4,1fr);padding:0;gap:2px;background:var(--navy)}
+nav .wrap{display:grid;grid-template-columns:repeat(6,1fr);padding:0;gap:2px;background:var(--navy)}
 nav button{padding:6px 2px;min-height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:6px;
   font-size:11px;color:#fff;background:#2b2b2b;text-transform:uppercase;letter-spacing:.06em;font-weight:700;border:1px solid #555}
 nav button .ic{font-size:13px;line-height:1}
@@ -66,6 +66,8 @@ h2{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#000;backgr
 details{margin-top:6px}
 summary{cursor:pointer;color:var(--amber);font-size:12px;min-height:28px;display:flex;align-items:center;font-weight:700;list-style:none;text-transform:uppercase;letter-spacing:.05em}
 summary::-webkit-details-marker{display:none}
+summary.h2{color:#000;background:var(--amber);font-size:11px;text-transform:uppercase;letter-spacing:.1em;margin:14px 0 6px;padding:2px 8px;min-height:0;font-weight:700}
+summary.h2::before{font-size:9px}
 summary::before{content:"▶";font-size:9px;margin-right:6px;transition:transform .15s}
 details[open]>summary::before{transform:rotate(90deg)}
 ul.l{margin:6px 0;padding-left:18px}
@@ -115,6 +117,20 @@ dialog::backdrop{background:rgba(0,0,0,.7)}
 .chart{position:relative;touch-action:pan-y}
 .disclaimer{font-size:10.5px;color:var(--muted);margin:20px 2px 6px;text-align:center;text-transform:uppercase;letter-spacing:.04em}
 .spark{display:block;width:100%;height:44px}
+.chgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:8px}
+.chcard{background:var(--surface);border:1px solid var(--border);padding:8px 10px;min-width:0}
+.chhd{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.chro{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;margin:2px 0 4px;min-height:15px}
+.chro b{color:#fff;font-weight:400}
+.chsvg{display:block;width:100%;height:auto;touch-action:pan-y}
+.chleg{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--ink2);margin:6px 0}
+.chleg i{display:inline-block;width:14px;height:0;border-top:2px solid;vertical-align:middle;margin-right:4px}
+.facts{font-size:12px;color:var(--ink2);margin:3px 0}
+.facts b{color:#fff}.facts b.up{color:var(--good-text)}.facts b.dn{color:var(--crit-text)}
+.fl{display:inline-block;min-width:78px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+.tag{display:inline-block;padding:0 6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;border:1px solid var(--axis);color:var(--ink2)}
+.tag.up{border-color:var(--good-text);color:var(--good-text)}.tag.dn{border-color:var(--crit-text);color:var(--crit-text)}
+@media(max-width:520px){nav button .ic{display:none}nav button{font-size:10px;letter-spacing:0}}
 @media(min-width:900px){.tiles{grid-template-columns:repeat(4,1fr)}}
 @media(max-width:380px){.plan{grid-template-columns:repeat(2,1fr)}}
 @media(forced-colors:active){.badge,.cell{border:1px solid CanvasText}}
@@ -130,6 +146,8 @@ dialog::backdrop{background:rgba(0,0,0,.7)}
 <main class="wrap">
   <section id="s-today" class="on"></section>
   <section id="s-watch"></section>
+  <section id="s-ch"></section>
+  <section id="s-op"></section>
   <section id="s-hist"></section>
   <section id="s-an"></section>
   <p class="disclaimer">Rule-based technical signals from daily bars, for research. Not financial advice. Past performance does not predict results.</p>
@@ -151,7 +169,7 @@ dialog::backdrop{background:rgba(0,0,0,.7)}
 
 <script>
 const DATA = /*__DATA__*/null;
-const L = DATA.latest, H = DATA.history;
+const L = DATA.latest, H = DATA.history, C = DATA.charts || {}, O = DATA.options || {};
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -201,6 +219,19 @@ function aiBlock(i) {
     ${(a.catalysts || []).length ? `<ul class="l">${a.catalysts.map(r => `<li>✓ ${esc(r)}</li>`).join("")}</ul>` : ""}</div>`;
 }
 
+const REC = {strong_buy: ["Strong buy", "up"], buy: ["Buy", "up"], hold: ["Hold", ""], underperform: ["Underperform", "dn"], sell: ["Sell", "dn"], strong_sell: ["Strong sell", "dn"]};
+function facts(i) {
+  const a = i.analyst, p = i.positioning, out = [];
+  if (a) {
+    const r = REC[a.rec] || [a.rec ? String(a.rec).replace(/_/g, " ") : null, ""], up = a.target_mean && i.price ? (a.target_mean / i.price - 1) * 100 : null;
+    out.push(`<div class="facts"><span class="fl">Analysts</span>${r[0] ? `<b class="${r[1]}">${esc(r[0])}</b>${a.rec_mean ? ` (${num(a.rec_mean, 1)}/5)` : ""}` : ""}${a.target_mean ? ` · Target <b>${usd(a.target_mean)}</b> <span class="${cls(up)}">${pct(up)}</span>` : ""}${a.target_low && a.target_high ? ` · Range ${usd(a.target_low)}–${usd(a.target_high)}` : ""}${a.n ? ` · ${a.n} analysts` : ""}</div>`);
+  }
+  if (p) {
+    out.push(`<div class="facts"><span class="fl">Positioning</span>${p.short_pct_float != null ? `Short <b class="${p.short_pct_float >= 10 ? "dn" : ""}">${num(p.short_pct_float, 1)}%</b> of float` : ""}${p.days_to_cover != null ? ` · ${num(p.days_to_cover, 1)}d to cover` : ""}${p.short_chg_pct != null ? ` · <span class="${cls(-p.short_chg_pct)}" title="Short interest vs prior month${p.short_date ? ", as of " + esc(p.short_date) : ""}">${p.short_chg_pct > 0 ? "▲" : "▼"} ${num(Math.abs(p.short_chg_pct), 1)}% m/m</span>` : ""}${p.inst_pct != null ? ` · Institutions <b>${num(p.inst_pct, 1)}%</b>` : ""}${p.insider_pct != null ? ` · Insiders <b>${num(p.insider_pct, 1)}%</b>` : ""}</div>`);
+  }
+  return out.join("");
+}
+
 function card(i, open = false) {
   const planHtml = (i.action === "BUY" || i.action === "WATCH") && i.stop != null ? `
     <div class="plan">
@@ -217,6 +248,7 @@ function card(i, open = false) {
       <div><div class="px">${usd(i.price)}</div><div class="chg ${cls(i.chg_pct)}" style="text-align:right">${i.chg_pct > 0 ? "▲" : i.chg_pct < 0 ? "▼" : ""} ${pct(i.chg_pct)}</div></div></div>
     <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:6px">${badge(i.action)}<span class="pill">${esc(i.conviction)} conviction</span>${i.earnings_days != null && i.earnings_days <= 14 ? `<span class="pill ${i.earnings_days <= 7 ? "flag" : ""}">Earnings ${esc(i.earnings_date)}</span>` : ""}${flags}</div>
     <div class="setup">${esc(i.label)}</div><div class="note">${esc(i.note)}</div>
+    ${facts(i)}
     ${planHtml}
     <details ${open ? "open" : ""}><summary>Why &amp; risks</summary>
       ${(i.reasons || []).length ? `<ul class="l">${i.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
@@ -237,15 +269,19 @@ function renderRegime() {
 }
 
 function renderToday() {
+  const fold = k => store.get("dsa.fold", {})[k] === false ? "" : "open";   // remembered per section, open by default
   const act = L.ideas.filter(i => i.action === "BUY" || i.action === "WATCH"), rest = L.ideas.filter(i => !(i.action === "BUY" || i.action === "WATCH"));
   const idx = L.market.indices.map(x => `<div class="grow"><div class="row between"><b>${x.code}</b><span class="chg ${cls(x.chg_pct)}">${pct(x.chg_pct)}</span></div><div class="nm">${esc(x.trend)}</div>${spark(x.spark)}</div>`).join("");
+  const mac = (L.market.macro || []).map(x => { const yl = x.kind === "yield";
+    return `<div class="grow"><div class="row between"><b>${esc(x.code)}</b><span class="chg ${yl ? "" : cls(-x.chg_pct)}" title="${yl ? "change in basis points" : "a rising VIX is shown red"}">${yl ? (x.chg > 0 ? "+" : "") + Math.round(x.chg * 100) + " bp" : pct(x.chg_pct)}</span></div><div class="nm">${num(x.price, 2)}${yl ? "%" : ""}</div>${spark(x.spark)}</div>`; }).join("");
   $("#s-today").innerHTML = `
     <div class="card"><div class="banner"><div class="grow"><div class="big">${{bullish:"Tailwind",neutral:"Mixed",bearish:"Headwind"}[L.market.regime]}</div><div class="note" style="margin:2px 0 0">${esc(L.market.note)}</div></div></div>
-      <div class="row" style="gap:16px;margin-top:8px">${idx}</div></div>
+      <div class="row" style="gap:16px;margin-top:8px;flex-wrap:wrap">${idx}${mac}</div></div>
     ${L.changes.length ? `<h2>Changed since ${esc(L.changes[0].prev_date)}</h2><div class="card">${L.changes.map(c => `<div style="padding:4px 0"><b>${esc(c.code)}</b>: ${esc(c.from)} → <b>${esc(c.to)}</b></div>`).join("")}</div>` : ""}
-    <h2>Ideas to act on (${act.length})</h2>
-    ${act.length ? act.map(i => card(i)).join("") : '<div class="card empty">No clean setups today. Doing nothing is a position.<br>See Watchlist for dip levels.</div>'}
-    ${rest.length ? `<h2>Not now (${rest.length})</h2>` + rest.map(i => `<div class="card"><div class="row"><div class="grow"><span class="tk" style="font-size:15px">${esc(i.code)}</span> <span class="nm">${esc(i.label)}</span></div>${badge(i.action)}<div class="px" style="font-size:14px;min-width:70px">${usd(i.price)}</div></div></div>`).join("") : ""}`;
+    <details class="sec" data-k="act" ${fold("act")}><summary class="h2">Ideas to act on (${act.length})</summary>
+    ${act.length ? act.map(i => card(i)).join("") : '<div class="card empty">No clean setups today. Doing nothing is a position.<br>See Watchlist for dip levels.</div>'}</details>
+    ${rest.length ? `<details class="sec" data-k="rest" ${fold("rest")}><summary class="h2">Not now (${rest.length})</summary>` + rest.map(i => `<div class="card"><div class="row"><div class="grow"><span class="tk" style="font-size:15px">${esc(i.code)}</span> <span class="nm">${esc(i.label)}</span></div>${badge(i.action)}<div class="px" style="font-size:14px;min-width:70px">${usd(i.price)}</div></div></div>`).join("") + "</details>" : ""}`;
+  $$("#s-today details.sec").forEach(d => d.addEventListener("toggle", () => { const f = store.get("dsa.fold", {}); f[d.dataset.k] = d.open; store.set("dsa.fold", f); }));
 }
 
 function renderWatch() {
@@ -291,6 +327,124 @@ async function wlWire() {
   $$("#s-watch .wl-rm").forEach(b => b.onclick = () => { if (confirm("Remove " + b.dataset.code + " from the watchlist?")) wlCall("remove", b.dataset.code); });
 }
 
+const sma = (a, n) => a.map((_, i) => i < n - 1 ? null : a.slice(i - n + 1, i + 1).reduce((s, v) => s + v, 0) / n);
+const kfmt = v => v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e3 ? Math.round(v / 1e3) + "K" : String(v);
+const CH_RANGES = ["1M", "3M", "6M", "YTD", "1Y", "3Y"];
+let CH_RANGE = "6M", CH_MA = true, CH_MA2 = false, CH_TYPE = "candle";
+const MA200_COL = "#3ec9ff";
+function rangeBars(bars, key) {   // how many of the latest daily bars a range covers
+  const last = bars.length - 1;
+  if (key === "YTD") { const yr = bars[last][0].slice(0, 4), i = bars.findIndex(b => b[0].slice(0, 4) === yr); return Math.max(5, bars.length - i); }
+  return Math.min(bars.length, {"1M": 21, "3M": 63, "6M": 126, "1Y": 252, "3Y": 756}[key]);
+}
+function weekly(vis) {   // collapse daily bars into weekly candles (keeps the 3Y view readable and fast)
+  const out = [], wk = d => { const t = new Date(d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() - (t.getUTCDay() + 6) % 7); return t.toISOString().slice(0, 10); };
+  let cur = null, key = "";
+  vis.forEach(b => { const k = wk(b[0]);
+    if (k !== key) { cur = [b[0], b[1], b[2], b[3], b[4], b[5], b[6]]; out.push(cur); key = k; }
+    else { cur[0] = b[0]; cur[2] = Math.max(cur[2], b[2]); cur[3] = Math.min(cur[3], b[3]); cur[4] = b[4]; cur[5] += b[5]; cur[6] = b[6]; } });
+  return out;
+}
+
+function candleChart(el, idea) {
+  const bars = C[idea.code] || [];
+  if (bars.length < 5) { el.innerHTML = '<div class="empty">No chart data.</div>'; return; }
+  const W = 560, Ht = 250, m = {l: 6, r: 50, t: 8, b: 18};
+  const closes = bars.map(b => b[4]), m20 = sma(closes, 20), m50 = sma(closes, 50), m200 = sma(closes, 200);
+  const days = rangeBars(bars, CH_RANGE), agg = days > 260 && CH_TYPE === "candle";   // 3Y candles are collapsed to weekly; the line stays daily
+  let v = bars.slice(bars.length - days).map((b, i) => [...b, bars.length - days + i]);   // 7th field = index into the daily arrays (for MAs)
+  if (agg) v = weekly(v);
+  const n = v.length;
+  const hiI = CH_TYPE === "line" ? 4 : 2, loI = CH_TYPE === "line" ? 4 : 3;
+  let hi = Math.max(...v.map(b => b[hiI])), lo = Math.min(...v.map(b => b[loI]));
+  const r0 = hi - lo, levels = [];
+  if ((idea.action === "BUY" || idea.action === "WATCH") && idea.stop != null) {
+    [["Stop", idea.stop, "var(--crit-text)"], ["Target", idea.target, "var(--good-text)"], [idea.trigger ? "Trigger" : "Entry", idea.trigger ?? idea.entry_high, "var(--amber)"]]
+      .forEach(([l, p, c]) => { if (p != null && p > lo - r0 * 0.3 && p < hi + r0 * 0.3) levels.push({l, p, c}); });
+  }
+  levels.forEach(x => { hi = Math.max(hi, x.p); lo = Math.min(lo, x.p); });
+  const pad = (hi - lo) * 0.05 || 1; hi += pad; lo -= pad;
+  const inner = Ht - m.t - m.b, volH = inner * 0.16, ph = inner - volH - 4, pw = W - m.l - m.r, step = pw / n, cw = Math.max(1.5, step * 0.68);
+  const x = i => m.l + (i + 0.5) * step, y = p => m.t + (hi - p) / (hi - lo) * ph;
+  const vmax = Math.max(...v.map(b => b[5])) || 1, vy = q => Ht - m.b - q / vmax * volH;
+  const ticks = [0, 1, 2, 3, 4].map(k => lo + (hi - lo) * k / 4);
+  const up = "var(--good-text)", dn = "var(--crit-text)";
+  const grid = ticks.map(p => `<line x1="${m.l}" x2="${W - m.r}" y1="${y(p).toFixed(1)}" y2="${y(p).toFixed(1)}" stroke="var(--grid)"/><text x="${W - m.r + 4}" y="${(y(p) + 3).toFixed(1)}" font-size="10" fill="var(--muted)">${p >= 100 ? p.toFixed(0) : p.toFixed(2)}</text>`).join("");
+  const vols = v.map((b, i) => { const col = b[4] >= b[1] ? up : dn;
+    return `<rect x="${(x(i) - cw / 2).toFixed(1)}" y="${vy(b[5]).toFixed(1)}" width="${cw.toFixed(1)}" height="${(Ht - m.b - vy(b[5])).toFixed(1)}" fill="${col}" opacity=".35"/>`; }).join("");
+  const price = CH_TYPE === "line"
+    ? (() => { const col = v[n - 1][4] >= v[0][4] ? up : dn, pts = v.map((b, i) => `${x(i).toFixed(1)},${y(b[4]).toFixed(1)}`).join(" ");
+        return `<polygon points="${x(0).toFixed(1)},${m.t + ph} ${pts} ${x(n - 1).toFixed(1)},${m.t + ph}" fill="${col}" opacity=".12"/><polyline fill="none" stroke="${col}" stroke-width="1.6" stroke-linejoin="round" points="${pts}"/>`; })()
+    : v.map((b, i) => { const [, o, h, l, c] = b, col = c >= o ? up : dn, top = y(Math.max(o, c)), bh = Math.max(1, Math.abs(y(o) - y(c)));
+        return `<line x1="${x(i).toFixed(1)}" x2="${x(i).toFixed(1)}" y1="${y(h).toFixed(1)}" y2="${y(l).toFixed(1)}" stroke="${col}"/><rect x="${(x(i) - cw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${cw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}"/>`; }).join("");
+  const line = (arr, col) => { const pts = v.map((b, i) => arr[b[6]] == null ? null : `${x(i).toFixed(1)},${y(arr[b[6]]).toFixed(1)}`).filter(Boolean); return pts.length > 1 ? `<polyline fill="none" stroke="${col}" stroke-width="1.2" points="${pts.join(" ")}"/>` : ""; };
+  const lv = levels.map(q => `<line x1="${m.l}" x2="${W - m.r}" y1="${y(q.p).toFixed(1)}" y2="${y(q.p).toFixed(1)}" stroke="${q.c}" stroke-dasharray="5 3"/><text x="${m.l + 3}" y="${(y(q.p) - 3).toFixed(1)}" font-size="10" fill="${q.c}">${q.l} ${q.p.toFixed(2)}</text>`).join("");
+  const dl = [0, Math.floor(n / 2), n - 1].map((i, k) => `<text x="${k === 0 ? m.l : k === 2 ? W - m.r : x(i)}" y="${Ht - 4}" font-size="10" fill="var(--muted)" text-anchor="${k === 0 ? "start" : k === 2 ? "end" : "middle"}">${v[i][0].slice(2)}</text>`).join("");
+  const last = bars[bars.length - 1], prev = bars[bars.length - 2] || last, chg = (last[4] / prev[4] - 1) * 100;
+  el.innerHTML = `<div class="chhd"><span class="tk">${esc(idea.code)}</span><span class="px">${usd(last[4])}</span><span class="chg ${cls(chg)}">${pct(chg)}</span>${badge(idea.action)}</div>
+    <div class="chro"></div>
+    <svg class="chsvg" viewBox="0 0 ${W} ${Ht}" role="img" aria-label="${esc(idea.code)} ${CH_TYPE === "line" ? "line" : agg ? "weekly candlestick" : "daily candlestick"} chart, ${CH_RANGE}">${grid}${vols}${price}${CH_MA || CH_MA2 ? `<clipPath id="cp-${esc(idea.code)}"><rect x="${m.l}" y="${m.t}" width="${pw}" height="${ph}"/></clipPath><g clip-path="url(#cp-${esc(idea.code)})">${CH_MA2 ? line(m200, MA200_COL) : ""}${line(m50, "var(--series)")}${CH_MA ? line(m20, "var(--amber)") : ""}</g>` : ""}${lv}${dl}<line class="xh" y1="${m.t}" y2="${Ht - m.b}" stroke="var(--muted)" style="display:none"/><rect class="hit" x="${m.l}" y="0" width="${pw}" height="${Ht}" fill="transparent"/></svg>`;
+  const ro = $(".chro", el), svg = $("svg", el), xh = $(".xh", el);
+  const show = b => { ro.innerHTML = `<b>${agg ? "wk to " : ""}${b[0]}</b> O ${b[1].toFixed(2)} H ${b[2].toFixed(2)} L ${b[3].toFixed(2)} C <b>${b[4].toFixed(2)}</b> Vol ${kfmt(b[5])}`; };
+  show(last);
+  const move = e => { const r = svg.getBoundingClientRect(), i = Math.max(0, Math.min(n - 1, Math.floor(((e.clientX - r.left) * W / r.width - m.l) / step)));
+    xh.style.display = ""; xh.setAttribute("x1", x(i)); xh.setAttribute("x2", x(i)); show(v[i]); };
+  $(".hit", el).addEventListener("pointermove", move);
+  $(".hit", el).addEventListener("pointerleave", () => { xh.style.display = "none"; show(last); });
+}
+
+function renderCharts() {
+  $("#s-ch").innerHTML = `<div class="chips" role="group" aria-label="Chart range">${CH_RANGES.map(l => `<button class="chip" data-r="${l}" aria-pressed="${CH_RANGE === l}">${l}</button>`).join("")}<button class="chip" data-type="candle" aria-pressed="${CH_TYPE === "candle"}" style="margin-left:10px">Candles</button><button class="chip" data-type="line" aria-pressed="${CH_TYPE === "line"}">Line</button><button class="chip" id="ch-ma" aria-pressed="${CH_MA}">MA 20/50</button><button class="chip" id="ch-ma2" aria-pressed="${CH_MA2}">MA 50/200</button></div>
+    <div class="chleg"><span><i style="border-color:var(--good-text)"></i>Up day</span><span><i style="border-color:var(--crit-text)"></i>Down day</span>${CH_MA ? `<span><i style="border-color:var(--amber)"></i>MA20</span>` : ""}${CH_MA || CH_MA2 ? `<span><i style="border-color:var(--series)"></i>MA50</span>` : ""}${CH_MA2 ? `<span><i style="border-color:${MA200_COL}"></i>MA200</span>` : ""}<span>Dashed: plan levels (Stop / Target / Entry)</span></div>
+    <div class="chgrid">${L.ideas.map(i => `<div class="chcard" data-code="${esc(i.code)}"></div>`).join("")}</div>
+    <div class="note" style="margin-top:8px">Daily candles with volume (3Y candles are weekly; the line view and moving averages are daily; lines outside the price range are clipped). Hover or touch a chart to read a day's open, high, low, close and volume.</div>`;
+  $$("#s-ch .chcard").forEach(el => candleChart(el, L.ideas.find(i => i.code === el.dataset.code)));
+  $$("#s-ch .chip[data-r]").forEach(b => b.onclick = () => { CH_RANGE = b.dataset.r; renderCharts(); });
+  $$("#s-ch .chip[data-type]").forEach(b => b.onclick = () => { CH_TYPE = b.dataset.type; renderCharts(); });
+  $("#ch-ma2").onclick = () => { CH_MA2 = !CH_MA2; renderCharts(); };
+  $("#ch-ma").onclick = () => { CH_MA = !CH_MA; renderCharts(); };
+}
+
+function ratioTag(imp, past) {
+  if (imp == null || !past) return "";
+  const r = imp / past;
+  return r >= 1.25 ? `<span class="tag dn" title="Options price a bigger move than past reports delivered">Rich ${r.toFixed(1)}×</span>` : r <= 0.8 ? `<span class="tag up" title="Options price a smaller move than past reports delivered">Cheap ${r.toFixed(1)}×</span>` : `<span class="tag">Fair ${r.toFixed(1)}×</span>`;
+}
+const impTxt = o => o.implied_move_pct != null ? (o.move_quality === "rough" ? "~" : "") + "±" + num(o.implied_move_pct, 1) + "%" : "–";
+
+function ivChart(o) {
+  const T = o.term, n = T.length, W = 560, Ht = 176, m = {l: 34, r: 10, t: 16, b: 32}, step = (W - m.l - m.r) / n;
+  const ivs = T.map(t => t.iv), lo = Math.min(...ivs), hi = Math.max(...ivs), pad = (hi - lo) * 0.25 || 2, y0 = Math.max(0, lo - pad), y1 = hi + pad;
+  const x = i => m.l + (i + 0.5) * step, y = v => m.t + (y1 - v) / (y1 - y0) * (Ht - m.t - m.b);
+  const grid = [y0, (y0 + y1) / 2, y1].map(v => `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--grid)"/><text x="${m.l - 4}" y="${(y(v) + 3).toFixed(1)}" font-size="10" fill="var(--muted)" text-anchor="end">${v.toFixed(0)}%</text>`).join("");
+  const pts = T.map((t, i) => `${x(i).toFixed(1)},${y(t.iv).toFixed(1)}`).join(" ");
+  const dots = T.map((t, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(t.iv).toFixed(1)}" r="3.2" fill="var(--amber)"/><text x="${x(i).toFixed(1)}" y="${(y(t.iv) - 7).toFixed(1)}" font-size="10" fill="#fff" text-anchor="middle">${t.iv.toFixed(0)}</text><text x="${x(i).toFixed(1)}" y="${Ht - 17}" font-size="10" fill="var(--ink2)" text-anchor="middle">${t.exp.slice(5)}</text><text x="${x(i).toFixed(1)}" y="${Ht - 5}" font-size="9" fill="var(--muted)" text-anchor="middle">${t.dte}d</text>`).join("");
+  let em = "";
+  if (o.earnings_days != null && o.earnings_days >= 0) {   // place the earnings marker between the expiries it falls between
+    let k = T.findIndex(t => t.dte > o.earnings_days), pos;
+    if (k === -1) pos = null; else if (k === 0) pos = -0.35; else pos = k - 1 + (o.earnings_days - T[k - 1].dte) / (T[k].dte - T[k - 1].dte);
+    if (pos != null) { const ex = x(Math.max(-0.35, pos)); em = `<line x1="${ex.toFixed(1)}" x2="${ex.toFixed(1)}" y1="${m.t - 6}" y2="${Ht - m.b}" stroke="var(--crit-text)" stroke-dasharray="4 3"/><text x="${(ex + 4).toFixed(1)}" y="${m.t + 4}" font-size="10" fill="var(--crit-text)">Earnings${o.earnings_est ? " (est)" : ""}</text>`; }
+  }
+  return `<svg class="chsvg" viewBox="0 0 ${W} ${Ht}" role="img" aria-label="Implied volatility by expiry">${grid}<polyline fill="none" stroke="var(--amber)" stroke-width="1.5" points="${pts}"/>${em}${dots}</svg>`;
+}
+
+function renderOptions() {
+  const rows = L.ideas.filter(i => O[i.code]).map(i => ({i, o: O[i.code]}))
+    .sort((a, b) => ((a.o.earnings_days ?? 1e9) - (b.o.earnings_days ?? 1e9)) || a.i.code.localeCompare(b.i.code));
+  if (!rows.length) { $("#s-op").innerHTML = '<div class="card empty">No options data. Rebuild without <code>--no-options</code>.</div>'; return; }
+  const tbl = rows.map(({i, o}) => `<tr><td><b>${esc(i.code)}</b></td><td>${o.earnings_date ? esc(o.earnings_date.slice(5)) + " <span class=\"sub\">(" + o.earnings_days + "d" + (o.earnings_est ? ", est" : "") + ")</span>" : "–"}</td>
+    <td>${num(o.term[0].iv, 1)}%</td><td>${o.iv_pre != null ? num(o.iv_pre, 1) + "%" : "–"}</td><td>${o.iv_post != null ? num(o.iv_post, 1) + "%" : "–"}</td>
+    <td><b>${impTxt(o)}</b></td><td>${o.hist_avg_abs != null ? "±" + num(o.hist_avg_abs, 1) + "%" : "–"}</td><td style="text-align:left">${ratioTag(o.implied_move_pct, o.hist_avg_abs) || "–"}</td></tr>`).join("");
+  $("#s-op").innerHTML = `<h2>Implied volatility around earnings</h2>
+    <div class="card scroll"><table><tr><th>Ticker</th><th>Earnings</th><th>Front IV</th><th>IV before</th><th>IV after</th><th>Implied move</th><th>Past avg move</th><th style="text-align:left">Options vs past</th></tr>${tbl}</table></div>
+    <div class="note">Implied move: the expected size of the earnings-day move, estimated from the jump in at-the-money implied volatility between the last expiry before the report and the first one after it. A "~" marks a rough estimate (those expiries are far apart) and "est" means Yahoo's projected report date. Past avg move: the average actual close-to-close reaction over the last 8 reports. Rich = options price a bigger move than usually happens; Cheap = smaller. Yahoo option quotes can be stale after hours.</div>
+    <h2>IV term structure</h2>
+    <div class="chgrid">${rows.map(({i, o}) => `<div class="chcard"><div class="chhd"><span class="tk">${esc(i.code)}</span><span class="px">${usd(i.price)}</span><span class="chg ${cls(i.chg_pct)}">${pct(i.chg_pct)}</span>${ratioTag(o.implied_move_pct, o.hist_avg_abs)}</div>
+      <div class="chro">Implied <b>${impTxt(o)}</b> vs past <b>${o.hist_avg_abs != null ? "±" + num(o.hist_avg_abs, 1) + "%" : "–"}</b> · Earnings <b>${o.earnings_date ? esc(o.earnings_date) : "n/a"}</b></div>
+      ${ivChart(o)}
+      <div class="chro">Past reports: ${o.hist.length ? o.hist.map(h => `<span class="${cls(h.move_pct)}" title="${esc(h.date)}">${pct(h.move_pct)}</span>`).join(" ") : "n/a"}</div></div>`).join("")}</div>`;
+}
+
 function renderHist() {
   const days = H.slice(-20), codes = L.watchlist;
   if (!window._hd) window._hd = days[days.length - 1]?.date;
@@ -328,7 +482,7 @@ function renderAn() {
 }
 
 /* ---------- shell ---------- */
-const TABS = [["today", "Today", "★", renderToday], ["watch", "Watchlist", "☰", renderWatch], ["hist", "History", "◷", renderHist], ["an", "Analyze", "⌕", renderAn]];
+const TABS = [["today", "Today", "★", renderToday], ["watch", "Watchlist", "☰", renderWatch], ["ch", "Charts", "▥", renderCharts], ["op", "Options", "◈", renderOptions], ["hist", "History", "◷", renderHist], ["an", "Analyze", "⌕", renderAn]];
 function show(id) {
   TABS.forEach(([k]) => $("#s-" + k).classList.toggle("on", k === id));
   $("#tabs").querySelectorAll("button").forEach(b => b.dataset.t === id ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
@@ -340,7 +494,7 @@ $("#tabs").onclick = e => { const b = e.target.closest("button"); if (b) show(b.
 function applyTheme() { if (S.theme === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = S.theme; }
 $("#gear").onclick = () => { $("#acct").value = S.acct ?? ""; $("#risk").value = S.risk ?? 1; $("#dlg").showModal(); };
 $("#dlg").addEventListener("close", () => { S.acct = parseFloat($("#acct").value) || null; S.risk = Math.min(5, Math.max(0.1, parseFloat($("#risk").value) || 1)); store.set("dsa.settings", S); applyTheme(); renderAll(); });
-applyTheme(); renderAll(); show((location.hash || "#today").slice(1).replace(/[^a-z]/g, "") in {today:1,watch:1,hist:1,an:1} ? location.hash.slice(1) : "today");
+applyTheme(); renderAll(); show((location.hash || "#today").slice(1).replace(/[^a-z]/g, "") in {today:1,watch:1,ch:1,op:1,hist:1,an:1} ? location.hash.slice(1) : "today");
 </script>
 </body>
 </html>
