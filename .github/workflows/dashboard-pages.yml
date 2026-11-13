@@ -1,0 +1,62 @@
+name: US Watchlist Dashboard
+
+# Rebuilds dashboard/site and publishes it to GitHub Pages after the US close.
+# Needs a repo YOU own (fork this one): Settings -> Pages -> Source: "GitHub Actions".
+# Pages sites are PUBLIC on free plans: your watchlist and signals will be visible to anyone with the link.
+# Optional secrets (Settings -> Secrets): STOCK_LIST, GEMINI_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY (AI layer),
+# TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (digest push).
+
+on:
+  schedule:
+    - cron: '30 22 * * 1-5'     # 22:30 UTC Mon-Fri = 17:30 ET (EST) / 18:30 ET (EDT): after the close
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: dashboard-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      # Keep history.json between runs so the History tab accumulates real (non-reconstructed) briefings
+      - uses: actions/cache@v4
+        with:
+          path: dashboard/site/data
+          key: dashboard-data-${{ github.run_id }}
+          restore-keys: dashboard-data-
+      - name: Build dashboard
+        env:
+          STOCK_LIST: ${{ secrets.STOCK_LIST || vars.STOCK_LIST || 'AAPL,NVDA,MSFT,TSLA,AMZN,GOOGL,META' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+          PYTHONUTF8: '1'
+        run: python dashboard/build.py ${{ (secrets.TELEGRAM_BOT_TOKEN != '' && '--notify') || '' }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dashboard/site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

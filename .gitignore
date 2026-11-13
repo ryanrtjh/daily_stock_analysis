@@ -89,3 +89,6 @@ static/
 /apps/dsa-desktop/node_modules/
 /node_modules/
 docs/specs/
+
+# Personal watchlist dashboard output
+dashboard/site/
