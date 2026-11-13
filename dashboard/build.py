@@ -276,9 +276,14 @@ def main() -> int:
         return {k: v for k, v in i.items() if k not in ("spark", "spark_dates", "news", "levels")}
 
     for d_, rows in backfill.items():
-        if d_ not in by_date and d_ != asof:
+        if d_ == asof:
+            continue
+        if d_ not in by_date:
             by_date[d_] = {"date": d_, "backfilled": True,
                            "items": [{**r, "conviction": None} for r in sorted(rows, key=lambda r: r["code"])]}
+        else:   # day already stored: fill in tickers added since (their earlier days would otherwise stay empty)
+            have = {it["code"] for it in by_date[d_]["items"]}
+            by_date[d_]["items"] += [{**r, "conviction": None} for r in sorted(rows, key=lambda r: r["code"]) if r["code"] not in have]
     prev = [h for h in sorted(by_date.values(), key=lambda h: h["date"]) if h["date"] < asof]
     changes = []
     if prev:
