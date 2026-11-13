@@ -383,14 +383,17 @@ function candleChart(el, idea) {
   const last = bars[bars.length - 1], prev = bars[bars.length - 2] || last, chg = (last[4] / prev[4] - 1) * 100;
   el.innerHTML = `<div class="chhd"><span class="tk">${esc(idea.code)}</span><span class="px">${usd(last[4])}</span><span class="chg ${cls(chg)}">${pct(chg)}</span>${badge(idea.action)}</div>
     <div class="chro"></div>
-    <svg class="chsvg" viewBox="0 0 ${W} ${Ht}" role="img" aria-label="${esc(idea.code)} ${CH_TYPE === "line" ? "line" : agg ? "weekly candlestick" : "daily candlestick"} chart, ${CH_RANGE}">${grid}${vols}${price}${CH_MA || CH_MA2 ? `<clipPath id="cp-${esc(idea.code)}"><rect x="${m.l}" y="${m.t}" width="${pw}" height="${ph}"/></clipPath><g clip-path="url(#cp-${esc(idea.code)})">${CH_MA2 ? line(m200, MA200_COL) : ""}${line(m50, "var(--series)")}${CH_MA ? line(m20, "var(--amber)") : ""}</g>` : ""}${lv}${dl}<line class="xh" y1="${m.t}" y2="${Ht - m.b}" stroke="var(--muted)" style="display:none"/><rect class="hit" x="${m.l}" y="0" width="${pw}" height="${Ht}" fill="transparent"/></svg>`;
-  const ro = $(".chro", el), svg = $("svg", el), xh = $(".xh", el);
+    <svg class="chsvg" viewBox="0 0 ${W} ${Ht}" role="img" aria-label="${esc(idea.code)} ${CH_TYPE === "line" ? "line" : agg ? "weekly candlestick" : "daily candlestick"} chart, ${CH_RANGE}">${grid}${vols}${price}${CH_MA || CH_MA2 ? `<clipPath id="cp-${esc(idea.code)}"><rect x="${m.l}" y="${m.t}" width="${pw}" height="${ph}"/></clipPath><g clip-path="url(#cp-${esc(idea.code)})">${CH_MA2 ? line(m200, MA200_COL) : ""}${line(m50, "var(--series)")}${CH_MA ? line(m20, "var(--amber)") : ""}</g>` : ""}${lv}${dl}<line class="xh" y1="${m.t}" y2="${Ht - m.b}" stroke="var(--muted)" style="display:none"/><line class="yh" x1="${m.l}" x2="${W - m.r}" stroke="var(--ink2)" stroke-opacity=".6" style="display:none"/><rect class="yl" x="${W - m.r + 1}" width="${m.r - 2}" height="14" fill="var(--amber)" style="display:none"/><text class="yt" x="${W - m.r + 4}" font-size="10" font-weight="700" fill="#000" style="display:none"/><rect class="hit" x="${m.l}" y="0" width="${pw}" height="${Ht}" fill="transparent"/></svg>`;
+  const ro = $(".chro", el), svg = $("svg", el), xh = $(".xh", el), yh = $(".yh", el), yl = $(".yl", el), yt = $(".yt", el);
   const show = b => { ro.innerHTML = `<b>${agg ? "wk to " : ""}${b[0]}</b> O ${b[1].toFixed(2)} H ${b[2].toFixed(2)} L ${b[3].toFixed(2)} C <b>${b[4].toFixed(2)}</b> Vol ${kfmt(b[5])}`; };
   show(last);
   const move = e => { const r = svg.getBoundingClientRect(), i = Math.max(0, Math.min(n - 1, Math.floor(((e.clientX - r.left) * W / r.width - m.l) / step)));
-    xh.style.display = ""; xh.setAttribute("x1", x(i)); xh.setAttribute("x2", x(i)); show(v[i]); };
+    xh.style.display = ""; xh.setAttribute("x1", x(i)); xh.setAttribute("x2", x(i)); show(v[i]);
+    const py = (e.clientY - r.top) * Ht / r.height, inPrice = py >= m.t && py <= m.t + ph;   // horizontal line + price tag only over the price panel (not the volume strip)
+    [yh, yl, yt].forEach(q => q.style.display = inPrice ? "" : "none");
+    if (inPrice) { yh.setAttribute("y1", py); yh.setAttribute("y2", py); yl.setAttribute("y", py - 7); yt.setAttribute("y", py + 3.5); yt.textContent = (hi - (py - m.t) / ph * (hi - lo)).toFixed(2); } };
   $(".hit", el).addEventListener("pointermove", move);
-  $(".hit", el).addEventListener("pointerleave", () => { xh.style.display = "none"; show(last); });
+  $(".hit", el).addEventListener("pointerleave", () => { [xh, yh, yl, yt].forEach(q => q.style.display = "none"); show(last); });
 }
 
 function renderCharts() {
