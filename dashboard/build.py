@@ -5,10 +5,9 @@ Build the US watchlist dashboard (a single self-contained, mobile-friendly HTML 
     python dashboard/build.py                 # watchlist from STOCK_LIST in .env
     python dashboard/build.py --stocks AAPL,NVDA
     python dashboard/build.py --ai on|off|auto   # LLM layer via the repo's own pipeline
-    python dashboard/build.py --no-backtest      # skip the ~6s/ticker walk-forward
 
 Output (dashboard/site/):  index.html (open it, host it, or send it)
-                           data/latest.json, data/history.json, data/backtest.json, digest.txt
+                           data/latest.json, data/history.json, digest.txt
 """
 from __future__ import annotations
 
@@ -163,31 +162,7 @@ def read_ai(codes: List[str], max_age_days: int = 2) -> Dict[str, Dict[str, Any]
     return out
 
 
-def read_ai_backtest() -> Optional[Dict[str, Any]]:
-    try:
-        from src.services.backtest_service import BacktestService
-        s = BacktestService().get_summary(scope="overall", code=None)
-        return json.loads(json.dumps(s, default=str)) if s else None
-    except Exception:
-        return None
-
-
 # ------------------------------------------------------------------ snapshot assembly
-def evidence_for(setup: str, stats: Dict[str, Dict[str, Any]], base: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    s = stats.get(setup) or {"n": 0}
-    base_r = (base or {}).get("avg_r") or 0.0
-    if s["n"] < 20:
-        verdict = "Too few historical trades to judge"
-    elif (s.get("profit_factor") or 0) >= 1.1 and s.get("avg_r", 0) - base_r > 0.05:
-        verdict = "Beat random entries in backtest"
-    elif (s.get("profit_factor") or 0) < 1.0 or s.get("avg_r", 0) < base_r - 0.05:
-        verdict = "Worse than random entries in backtest: low-confidence"
-    else:
-        verdict = "About the same as random entries in backtest"
-    return {"n": s["n"], "win_rate": s.get("win_rate"), "avg_r": s.get("avg_r"),
-            "profit_factor": s.get("profit_factor"), "verdict": verdict}
-
-
 def digest(snap: Dict[str, Any]) -> str:
     L = [f"US watchlist briefing - {snap['asof']}",
          f"Market: {snap['market']['regime'].upper()} - {snap['market']['note']}", ""]
@@ -214,7 +189,6 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stocks", help="comma list (default: STOCK_LIST from .env, US tickers only)")
     ap.add_argument("--ai", choices=["auto", "on", "off"], default="auto")
-    ap.add_argument("--no-backtest", action="store_true")
     ap.add_argument("--notify", action="store_true",
                     help="push the text digest to the channels configured in .env (Telegram/Discord/Slack/email/...)")
     args = ap.parse_args()
@@ -257,46 +231,11 @@ def main() -> int:
                           "spark": x["spark"], "spark_dates": x["spark_dates"]} for x in (spy, qqq) if x]
     asof = spy["asof"]
 
-    # --- backtest + history back-fill (walk-forward over full history)
-    all_trades: List[Dict[str, Any]] = []
+    # --- history back-fill (replay the playbook over the last few bars)
     backfill: Dict[str, List[Dict[str, Any]]] = {}
-    base_pool: List[Dict[str, Any]] = []
-    if not args.no_backtest:
-        for c in codes:
-            t1 = time.time()
-            wf = E.walk_forward(c, frames[c], analyzer, history_days=BACKFILL_DAYS)
-            all_trades += wf["trades"]
-            base_pool += wf["baseline_trades"]
-            for row in wf["daily"]:
-                backfill.setdefault(row["date"], []).append({"code": c, **row})
-            log(f"backtest {c}: {len(wf['trades'])} trades ({time.time() - t1:.0f}s)")
-    prev_bt_path = SITE / "data" / "backtest.json"
-    kept_bt = None
-    if args.no_backtest and prev_bt_path.exists():
-        kept_bt = json.loads(prev_bt_path.read_text(encoding="utf-8"))   # keep the last full backtest
-        log("--no-backtest: reusing the previous backtest results")
-    by_setup = {k: E.summarise_trades([t for t in all_trades if t["setup"] == k]) for k in E.SETUPS}
-    overall = E.summarise_trades(all_trades)
-    baseline = E.summarise_trades(base_pool) if base_pool else None
-    all_trades.sort(key=lambda t: t["exit_date"])
-    cum, curve = 0.0, []
-    for tr in all_trades:
-        cum += tr["r"]
-        curve.append({"date": tr["exit_date"], "cum_r": round(cum, 2)})
-    backtest = {
-        "overall": overall, "by_setup": by_setup, "baseline": baseline, "curve": curve,
-        "by_ticker": {c: E.summarise_trades([t for t in all_trades if t["code"] == c]) for c in codes},
-        "recent": [{k: (round(v, 2) if isinstance(v, float) else v) for k, v in t.items() if k != "exit_idx"} for t in all_trades[-25:]][::-1],
-        "span": {"from": min((t["signal_date"] for t in all_trades), default=None), "to": asof},
-        "assumptions": ("Walk-forward on daily bars, no look-ahead. Entry next open (or trigger cross within 5 bars; gap-ups skipped). "
-                        "Exit at stop, target, or after 10 bars; stop wins if both hit the same bar. One open trade per ticker. "
-                        "No fees or slippage. Mega-cap watchlist in a rising market: results are optimistic and not a forecast."),
-        "ai": read_ai_backtest(),
-    }
-
-    if kept_bt:
-        backtest = {**kept_bt, "ai": backtest["ai"]}
-        by_setup, baseline = backtest["by_setup"], backtest["baseline"]
+    for c in codes:
+        for row in E.daily_plans(c, frames[c], analyzer, history_days=BACKFILL_DAYS):
+            backfill.setdefault(row["date"], []).append({"code": c, **row})
 
     # --- AI layer
     use_ai = args.ai == "on" or (args.ai == "auto" and ai_available())
@@ -314,7 +253,7 @@ def main() -> int:
         n = now[c]
         m = metas[c]
         cv = E.conviction(n["score"], n, market["regime"], m["earnings_days"])
-        ideas.append({**n, **m, **cv, "evidence": evidence_for(n["setup"], by_setup, baseline), "ai": ai.get(c)})
+        ideas.append({**n, **m, **cv, "ai": ai.get(c)})
     order = {"BUY": 0, "WATCH": 1, "WAIT": 2, "HOLD": 3, "AVOID": 4}
     clevel = {"High": 0, "Medium": 1, "Low": 2}
     ideas.sort(key=lambda i: (order.get(i["action"], 9), clevel[i["conviction"]], -i["adj_score"]))
@@ -327,7 +266,7 @@ def main() -> int:
     by_date = {h["date"]: h for h in history}
 
     def compact(i):   # drop heavy fields for stored history
-        return {k: v for k, v in i.items() if k not in ("spark", "spark_dates", "news", "levels", "evidence")}
+        return {k: v for k, v in i.items() if k not in ("spark", "spark_dates", "news", "levels")}
 
     for d_, rows in backfill.items():
         if d_ not in by_date and d_ != asof:
@@ -352,10 +291,9 @@ def main() -> int:
         "ai_enabled": bool(ai), "ai_key_present": ai_available(),
     }
     (SITE / "data" / "latest.json").write_text(json.dumps(snap, indent=1, default=str), encoding="utf-8")
-    (SITE / "data" / "backtest.json").write_text(json.dumps(backtest, indent=1, default=str), encoding="utf-8")
     (SITE / "digest.txt").write_text(digest(snap), encoding="utf-8")
 
-    payload = {"latest": snap, "history": history, "backtest": backtest}
+    payload = {"latest": snap, "history": history}
     tpl = (HERE / "template.html").read_text(encoding="utf-8")
     blob = json.dumps(payload, separators=(",", ":"), default=str).replace("</", "<\\/")
     (SITE / "index.html").write_text(tpl.replace("/*__DATA__*/null", blob), encoding="utf-8")

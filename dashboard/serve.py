@@ -31,11 +31,6 @@ _an = StockTrendAnalyzer()
 _regime_cache = {"t": 0.0, "v": None}
 
 
-def _backtest():
-    p = SITE / "data" / "backtest.json"
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {"by_setup": {}, "baseline": None}
-
-
 def _regime():
     if time.time() - _regime_cache["t"] > 600 or not _regime_cache["v"]:
         spy = E.analyse_now("SPY", _mgr.get_daily_data("SPY", days=400)[0], _an)
@@ -50,13 +45,12 @@ def analyze(symbol: str, want_ai: bool):
         raise ValueError("not enough price history for that symbol")
     now = E.analyse_now(symbol, df, _an)
     meta = build.fetch_meta(symbol)
-    bt = _backtest()
     cv = E.conviction(now["score"], now, _regime()["regime"], meta["earnings_days"])
     ai = None
     if want_ai and build.ai_available():
         build.run_ai([symbol], timeout=600)
         ai = build.read_ai([symbol]).get(symbol)
-    return {**now, **meta, **cv, "evidence": build.evidence_for(now["setup"], bt["by_setup"], bt.get("baseline")), "ai": ai}
+    return {**now, **meta, **cv, "ai": ai}
 
 
 class Handler(SimpleHTTPRequestHandler):

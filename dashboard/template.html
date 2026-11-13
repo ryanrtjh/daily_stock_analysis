@@ -33,7 +33,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .iconbtn:hover,.chip:hover{background:var(--wash)}
 nav{position:fixed;bottom:0;left:0;right:0;z-index:6;background:var(--navy);border-top:2px solid var(--amber);
   padding-bottom:env(safe-area-inset-bottom)}
-nav .wrap{display:grid;grid-template-columns:repeat(5,1fr);padding:0;gap:2px;background:var(--navy)}
+nav .wrap{display:grid;grid-template-columns:repeat(4,1fr);padding:0;gap:2px;background:var(--navy)}
 nav button{padding:6px 2px;min-height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:6px;
   font-size:11px;color:#fff;background:#2b2b2b;text-transform:uppercase;letter-spacing:.06em;font-weight:700;border:1px solid #555}
 nav button .ic{font-size:13px;line-height:1}
@@ -44,7 +44,7 @@ h2{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#000;backgr
 .card{background:var(--surface);border:1px solid var(--border);padding:8px 10px;margin:0 0 6px}
 .row{display:flex;align-items:center;gap:10px}
 .between{justify-content:space-between}
-.tk{font-weight:700;font-size:16px;color:#fff;background:var(--blue);padding:0 6px;letter-spacing:.02em}
+.tk{font-weight:700;font-size:16px;color:#fff;letter-spacing:.02em}
 .nm{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-transform:uppercase}
 .px{font-size:16px;font-weight:700;text-align:right;color:#fff;font-variant-numeric:tabular-nums}
 .chg{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
@@ -131,7 +131,6 @@ dialog::backdrop{background:rgba(0,0,0,.7)}
   <section id="s-today" class="on"></section>
   <section id="s-watch"></section>
   <section id="s-hist"></section>
-  <section id="s-bt"></section>
   <section id="s-an"></section>
   <p class="disclaimer">Rule-based technical signals from daily bars, for research. Not financial advice. Past performance does not predict results.</p>
 </main>
@@ -152,7 +151,7 @@ dialog::backdrop{background:rgba(0,0,0,.7)}
 
 <script>
 const DATA = /*__DATA__*/null;
-const L = DATA.latest, H = DATA.history, B = DATA.backtest;
+const L = DATA.latest, H = DATA.history;
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const num = (v, d = 2) => v == null ? "–" : Number(v).toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d});
@@ -176,33 +175,6 @@ function spark(vals, w = 120, h = 44) {
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="60-day price trend, ${num(v[0])} to ${num(v[v.length-1])}">
     <polyline fill="none" stroke="var(--series)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" points="${pts.map(p => p.map(n => n.toFixed(1)).join(",")).join(" ")}"/>
     <circle cx="${last[0]}" cy="${last[1]}" r="4" fill="var(--series)" stroke="var(--surface)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
-}
-
-function curveChart(el, pts) {
-  if (pts.length < 2) { el.innerHTML = '<div class="empty">Not enough trades yet.</div>'; return; }
-  const W = Math.max(300, Math.round(el.clientWidth || 340)), Ht = 220, m = {l: 38, r: 10, t: 10, b: 22};
-  const ys = pts.map(p => p.cum_r), lo = Math.min(0, ...ys), hi = Math.max(0, ...ys), span = (hi - lo) || 1;
-  const x = i => m.l + i * (W - m.l - m.r) / (pts.length - 1), y = v => m.t + (hi - v) * (Ht - m.t - m.b) / span;
-  const ticks = [lo, lo + span / 2, hi].map(v => Math.round(v));
-  const line = pts.map((p, i) => `${x(i).toFixed(1)},${y(p.cum_r).toFixed(1)}`).join(" ");
-  el.innerHTML = `<svg viewBox="0 0 ${W} ${Ht}" width="100%" role="img" aria-label="Cumulative R-multiple of all simulated trades, from ${pts[0].date} to ${pts[pts.length-1].date}, ending at ${pts[pts.length-1].cum_r} R">
-    ${[...new Set(ticks)].map(t => `<line x1="${m.l}" x2="${W-m.r}" y1="${y(t)}" y2="${y(t)}" stroke="${t===0?'var(--axis)':'var(--grid)'}" stroke-width="1"/><text x="${m.l-6}" y="${y(t)+4}" text-anchor="end" font-size="11" fill="var(--muted)">${t}R</text>`).join("")}
-    <text x="${m.l}" y="${Ht-5}" font-size="11" fill="var(--muted)">${pts[0].date}</text>
-    <text x="${W-m.r}" y="${Ht-5}" text-anchor="end" font-size="11" fill="var(--muted)">${pts[pts.length-1].date}</text>
-    <polyline fill="none" stroke="var(--series)" stroke-width="2" stroke-linejoin="round" points="${line}"/>
-    <g id="xh" style="display:none"><line y1="${m.t}" y2="${Ht-m.b}" stroke="var(--muted)" stroke-width="1"/><circle r="4.5" fill="var(--series)" stroke="var(--surface)" stroke-width="2"/></g>
-    <rect x="${m.l}" y="0" width="${W-m.l-m.r}" height="${Ht}" fill="transparent" id="hit"/></svg><div class="tip" style="display:none"></div>`;
-  const svg = $("svg", el), tip = $(".tip", el), xh = $("#xh", el), hit = $("#hit", el);
-  const move = e => {
-    const r = svg.getBoundingClientRect(), px = (e.clientX - r.left) * W / r.width;
-    let i = Math.round((px - m.l) * (pts.length - 1) / (W - m.l - m.r)); i = Math.max(0, Math.min(pts.length - 1, i));
-    xh.style.display = ""; $("line", xh).setAttribute("x1", x(i)); $("line", xh).setAttribute("x2", x(i));
-    $("circle", xh).setAttribute("cx", x(i)); $("circle", xh).setAttribute("cy", y(pts[i].cum_r));
-    tip.style.display = ""; tip.textContent = `${pts[i].date}: ${pts[i].cum_r > 0 ? "+" : ""}${pts[i].cum_r} R`;
-    const left = Math.min(Math.max(x(i) * r.width / W - 60, 0), r.width - 150); tip.style.left = left + "px"; tip.style.top = "0px";
-  };
-  hit.addEventListener("pointermove", move); hit.addEventListener("pointerdown", move);
-  hit.addEventListener("pointerleave", () => { xh.style.display = "none"; tip.style.display = "none"; });
 }
 
 /* ---------- idea card ---------- */
@@ -229,7 +201,6 @@ function aiBlock(i) {
 }
 
 function card(i, open = false) {
-  const ev = i.evidence || {}, evc = /Worse/.test(ev.verdict) ? "bad" : /Beat/.test(ev.verdict) ? "good" : "";
   const planHtml = (i.action === "BUY" || i.action === "WATCH") && i.stop != null ? `
     <div class="plan">
       <div><small>${i.trigger ? "Trigger" : "Entry"}</small><b>${i.trigger ? usd(i.trigger) : usd(i.entry_low) + "–" + num(i.entry_high)}</b></div>
@@ -246,10 +217,9 @@ function card(i, open = false) {
     <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:6px">${badge(i.action)}<span class="pill">${esc(i.conviction)} conviction</span>${i.earnings_days != null && i.earnings_days <= 14 ? `<span class="pill ${i.earnings_days <= 7 ? "flag" : ""}">Earnings ${esc(i.earnings_date)}</span>` : ""}${flags}</div>
     <div class="setup">${esc(i.label)}</div><div class="note">${esc(i.note)}</div>
     ${planHtml}
-    <details ${open ? "open" : ""}><summary>Why, risks &amp; track record</summary>
+    <details ${open ? "open" : ""}><summary>Why &amp; risks</summary>
       ${(i.reasons || []).length ? `<ul class="l">${i.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
       ${(i.risks || []).length ? `<ul class="l">${i.risks.map(r => `<li>⚠ ${esc(r)}</li>`).join("")}</ul>` : ""}
-      <div class="ev ${evc}"><b>This setup's track record</b> on your watchlist (${esc(B.span?.from || "")} on): ${ev.n ? `${ev.n} trades · ${num(ev.win_rate, 0)}% win · avg ${num(ev.avg_r, 2)}R · profit factor ${ev.profit_factor != null ? num(ev.profit_factor, 2) : "–"}.` : "no simulated trades."} <b>${esc(ev.verdict || "")}.</b></div>
       <div class="kv"><div>Trend<b>${esc(i.trend)}</b></div><div>RSI(12)<b>${num(lv.rsi, 0)}</b></div><div>Volume<b>${lv.vol_ratio != null ? lv.vol_ratio + "× avg" : "–"}</b></div>
         <div>MA5 / MA10<b>${num(lv.ma5)} / ${num(lv.ma10)}</b></div><div>MA20 / MA60<b>${num(lv.ma20)} / ${num(lv.ma60)}</b></div><div>ATR(14)<b>${num(lv.atr)}</b></div>
         <div>52w range<b>${num(lv.lo52, 0)}–${num(lv.hi52, 0)}</b></div><div>5d / 1m<b>${pct(i.ret_5d)} / ${pct(i.ret_1m)}</b></div><div>Score<b>${i.score}/100</b></div></div>
@@ -298,40 +268,6 @@ function renderHist() {
   $("#s-hist").querySelectorAll(".chip").forEach(b => b.onclick = () => { window._hd = b.dataset.d; renderHist(); });
 }
 
-function renderBT() {
-  const o = B.overall, bl = B.baseline;
-  if (!o || !o.n) { $("#s-bt").innerHTML = '<div class="card empty">Backtest was skipped. Run <code>build.py</code> without <code>--no-backtest</code>.</div>'; return; }
-  const edge = o.avg_r - (bl?.avg_r ?? 0);
-  const verdict = edge > 0.05 && o.profit_factor >= 1.1
-    ? ["good", `Setups beat random entries by ${num(edge, 2)}R per trade (same stops and targets). Encouraging, but this is one market regime.`]
-    : edge < -0.05
-    ? ["bad", `Setups did WORSE than random entries with the same stops (${num(edge, 2)}R per trade). Treat the ideas as a checklist and a risk framework, not a signal to trust.`]
-    : ["bad", `Setups were about the same as random entries with the same stops (${edge > 0 ? "+" : ""}${num(edge, 2)}R per trade): no proven timing edge. The value here is the risk plan (stop, target, size), not the entry signal.`];
-  const rows = Object.entries(B.by_setup).filter(([, s]) => s.n).map(([k, s]) => `<tr><td>${esc(({pullback:"Pullback buy",breakout:"Breakout",breakout_watch:"Breakout watch",bounce:"Oversold bounce",extended:"Extended",neutral:"No edge",avoid:"Avoid"})[k] || k)}</td><td>${s.n}</td><td>${num(s.win_rate, 0)}%</td><td class="${cls(s.avg_r)}">${num(s.avg_r, 2)}</td><td>${s.profit_factor != null ? num(s.profit_factor, 2) : "–"}</td><td>${s.target_hits}/${s.stop_hits}/${s.time_exits}</td></tr>`).join("");
-  const tk = Object.entries(B.by_ticker).filter(([, s]) => s.n).map(([k, s]) => `<tr><td><b>${esc(k)}</b></td><td>${s.n}</td><td>${num(s.win_rate, 0)}%</td><td class="${cls(s.avg_r)}">${num(s.avg_r, 2)}</td><td class="${cls(s.avg_ret)}">${pct(s.avg_ret, 2)}</td></tr>`).join("");
-  $("#s-bt").innerHTML = `
-    <div class="tiles">
-      <div class="tile"><small>Simulated trades</small><b>${o.n}</b><span>${esc(B.span.from)} → ${esc(B.span.to)}</span></div>
-      <div class="tile"><small>Win rate</small><b>${num(o.win_rate, 0)}%</b><span>Random entry, same stops: ${bl ? num(bl.win_rate, 0) + "%" : "–"}</span></div>
-      <div class="tile"><small>Avg R per trade</small><b class="${cls(o.avg_r)}">${o.avg_r > 0 ? "+" : ""}${num(o.avg_r, 2)}</b><span>Random entry: ${bl ? (bl.avg_r > 0 ? "+" : "") + num(bl.avg_r, 2) : "–"}R</span></div>
-      <div class="tile"><small>Profit factor</small><b>${o.profit_factor != null ? num(o.profit_factor, 2) : "–"}</b><span>Random entry: ${bl && bl.profit_factor != null ? num(bl.profit_factor, 2) : "–"}</span></div></div>
-    <div class="ev ${verdict[0]}" style="margin-top:10px"><b>Read this first.</b> ${verdict[1]}</div>
-    <h2>Cumulative R (all trades, by exit date)</h2>
-    <div class="card"><div class="row between" style="margin-bottom:6px"><span class="sub">1R = the amount risked per trade (entry − stop)</span><button class="btn ghost" id="tbl" style="min-height:34px;padding:4px 12px">Table</button></div>
-      <div class="chart" id="curve"></div><div id="curveTbl" style="display:none" class="scroll"></div></div>
-    <h2>By setup</h2><div class="card scroll"><table><tr><th>Setup</th><th>Trades</th><th>Win</th><th>Avg R</th><th>PF</th><th>T/S/Time</th></tr>${rows}</table>
-      <div class="sub" style="margin-top:6px">T/S/Time = exits at target / stop / 10-bar time stop. PF = profit factor.</div></div>
-    <h2>By ticker</h2><div class="card scroll"><table><tr><th>Ticker</th><th>Trades</th><th>Win</th><th>Avg R</th><th>Avg %</th></tr>${tk}</table></div>
-    <h2>Most recent simulated trades</h2><div class="card scroll"><table><tr><th>Ticker</th><th>Setup</th><th>In</th><th>Out</th><th>Result</th></tr>
-      ${B.recent.map(t => `<tr><td><b>${esc(t.code)}</b></td><td style="text-align:left;white-space:normal">${esc(t.label)}</td><td>${esc(t.entry_date.slice(5))}</td><td>${esc(t.exit_date.slice(5))} <span class="sub">${esc(t.reason)}</span></td><td class="${cls(t.r)}">${t.r > 0 ? "+" : ""}${num(t.r, 2)}R · ${pct(t.ret_pct)}</td></tr>`).join("")}</table></div>
-    ${B.ai ? `<h2>AI report accuracy (repo backtest)</h2><div class="card"><div class="kv"><div>Evaluated<b>${B.ai.completed_count ?? "–"}</b></div><div>Direction accuracy<b>${B.ai.direction_accuracy_pct != null ? num(B.ai.direction_accuracy_pct, 0) + "%" : "–"}</b></div><div>Win rate<b>${B.ai.win_rate_pct != null ? num(B.ai.win_rate_pct, 0) + "%" : "–"}</b></div></div></div>` : `<h2>AI report accuracy</h2><div class="card empty">Builds up once AI reports are at least 14 days old and have been scored against what the stock actually did.</div>`}
-    <h2>Assumptions</h2><div class="note">${esc(B.assumptions)}</div>`;
-  curveChart($("#curve"), B.curve);
-  $("#curveTbl").innerHTML = `<table><tr><th>Exit date</th><th>Cumulative R</th></tr>${B.curve.filter((_, i, a) => i % Math.ceil(a.length / 40) === 0 || i === a.length - 1).map(p => `<tr><td>${p.date}</td><td>${p.cum_r}</td></tr>`).join("")}</table>`;
-  $("#tbl").onclick = () => { const t = $("#curveTbl"), c = $("#curve"), show = t.style.display === "none"; t.style.display = show ? "" : "none"; c.style.display = show ? "none" : ""; $("#tbl").textContent = show ? "Chart" : "Table"; };
-}
-
-let _rz; addEventListener('resize', () => { clearTimeout(_rz); _rz = setTimeout(() => { const c = $('#curve'); if (c && c.offsetParent) curveChart(c, B.curve); }, 150); });
 function renderAn() {
   $("#s-an").innerHTML = `<h2>Analyze any US ticker</h2>
     <div class="card"><div class="row"><input type="text" id="sym" placeholder="e.g. AMD" autocapitalize="characters" autocomplete="off" maxlength="7" aria-label="Ticker symbol"><button class="btn" id="go">Analyze</button></div>
@@ -353,11 +289,10 @@ function renderAn() {
 }
 
 /* ---------- shell ---------- */
-const TABS = [["today", "Today", "★", renderToday], ["watch", "Watchlist", "☰", renderWatch], ["hist", "History", "◷", renderHist], ["bt", "Backtest", "∿", renderBT], ["an", "Analyze", "⌕", renderAn]];
+const TABS = [["today", "Today", "★", renderToday], ["watch", "Watchlist", "☰", renderWatch], ["hist", "History", "◷", renderHist], ["an", "Analyze", "⌕", renderAn]];
 function show(id) {
   TABS.forEach(([k]) => $("#s-" + k).classList.toggle("on", k === id));
   $("#tabs").querySelectorAll("button").forEach(b => b.dataset.t === id ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
-  if (id === "bt") { const c = $("#curve"); if (c && c.style.display !== "none") curveChart(c, B.curve); }
   history.replaceState(null, "", "#" + id); scrollTo(0, 0);
 }
 function renderAll() { renderRegime(); TABS.forEach(t => t[3]()); }

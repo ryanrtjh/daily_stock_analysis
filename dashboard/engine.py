@@ -6,8 +6,7 @@ Reuses the repo's own data layer (DataFetcherManager) and technical scorer
 (StockTrendAnalyzer), then adds:
   * a rule-based "playbook" that turns indicators into a concrete plan
     (setup, entry zone / trigger, stop, target, reward:risk)
-  * a walk-forward trade simulator used for the Backtest tab and for
-    back-filling the History tab.
+  * a day-by-day replay of the playbook used to back-fill the History tab.
 
 Everything here is rule-based technical analysis on daily bars. It is decision
 support, not advice. No look-ahead: the plan for day i only sees bars[:i+1].
@@ -34,8 +33,6 @@ from src.stock_analyzer import (
 logger = logging.getLogger(__name__)
 
 MIN_BARS = 100          # need MA60 + warm-up before the analyzer is meaningful
-MAX_HOLD_BARS = 10      # time stop for simulated trades
-TRIGGER_WINDOW = 5      # bars a trigger-type plan stays valid
 MIN_RR = 1.5            # below this a "buy" is downgraded to "wait"
 
 # ---------------------------------------------------------------- label maps
@@ -253,134 +250,26 @@ def build_plan(d: pd.DataFrame, t: TrendAnalysisResult) -> Plan:
     return plan
 
 
-# ---------------------------------------------------------------- trade simulation
-def simulate_trade(d: pd.DataFrame, i: int, plan: Plan) -> Optional[Dict[str, Any]]:
-    """
-    Simulate acting on the plan generated at the close of bar i.
-    Entry: next open (zone plans) or first cross of the trigger within TRIGGER_WINDOW bars.
-    Exit: stop (stop first if both hit the same bar), target, or time stop at MAX_HOLD_BARS.
-    Gaps through the stop exit at the open. No costs/slippage. Returns None if no trade.
-    """
-    n = len(d)
-    if plan.stop is None or plan.target is None or i + 1 >= n:
-        return None
-    o, h, l, c = d["open"].values, d["high"].values, d["low"].values, d["close"].values
-    atr = _f(d["atr14"].iloc[i], 0.0)
-
-    entry = None
-    start = None
-    if plan.trigger is not None:
-        for j in range(i + 1, min(i + 1 + TRIGGER_WINDOW, n)):
-            if h[j] >= plan.trigger:
-                entry, start = max(o[j], plan.trigger), j
-                break
-    else:
-        j = i + 1
-        if o[j] <= plan.entry_high + 0.5 * atr and o[j] > plan.stop:   # skip big gap-ups: don't chase
-            entry, start = o[j], j
-    if entry is None or entry <= plan.stop:
-        return None
-
-    risk = entry - plan.stop
-    last = min(start + MAX_HOLD_BARS - 1, n - 1)
-    exit_px, exit_idx, reason = c[last], last, "time"
-    for k in range(start, last + 1):
-        if k > start and o[k] <= plan.stop:
-            exit_px, exit_idx, reason = o[k], k, "stop"
-            break
-        if l[k] <= plan.stop:
-            exit_px, exit_idx, reason = plan.stop, k, "stop"
-            break
-        if h[k] >= plan.target:
-            exit_px, exit_idx, reason = plan.target, k, "target"
-            break
-    if exit_idx == last and reason == "time" and last == n - 1 and (last - start + 1) < MAX_HOLD_BARS:
-        return None   # still open at the end of data: not a closed trade
-    return {
-        "entry_date": d["date"].iloc[start].strftime("%Y-%m-%d"),
-        "exit_date": d["date"].iloc[exit_idx].strftime("%Y-%m-%d"),
-        "entry": float(entry), "exit": float(exit_px), "stop": float(plan.stop),
-        "target": float(plan.target), "reason": reason,
-        "ret_pct": float((exit_px / entry - 1) * 100),
-        "r": float((exit_px - entry) / risk),
-        "bars": int(exit_idx - start + 1),
-        "exit_idx": int(exit_idx),
-    }
-
-
-def walk_forward(code: str, df: pd.DataFrame, analyzer: StockTrendAnalyzer, history_days: int = 30) -> Dict[str, Any]:
-    """
-    Run the playbook on every historical bar. Returns:
-      trades:   closed, non-overlapping simulated trades for BUY/WATCH plans
-      daily:    plan summaries for the last `history_days` bars (History back-fill)
-      baseline: stats for entering every day at the next open and holding MAX_HOLD_BARS
-    """
+# ---------------------------------------------------------------- history back-fill
+def daily_plans(code: str, df: pd.DataFrame, analyzer: StockTrendAnalyzer, history_days: int = 25) -> List[Dict[str, Any]]:
+    """Plan summaries for the last `history_days` bars (feeds the History tab). No look-ahead: bar i only sees bars[:i+1]."""
     d = prepare(df)
     n = len(d)
-    trades: List[Dict[str, Any]] = []
-    daily: List[Dict[str, Any]] = []
-    busy_until = -1
-    for i in range(MIN_BARS, n):
+    out: List[Dict[str, Any]] = []
+    for i in range(max(MIN_BARS, n - history_days), n):
         sl = d.iloc[: i + 1]
         try:
             t = analyzer.analyze(sl[["date", "open", "high", "low", "close", "volume"]].copy(), code)
         except Exception:     # a bad slice must not kill the whole run
             continue
         plan = build_plan(sl, t)
-        if i >= n - history_days:
-            daily.append({
-                "date": d["date"].iloc[i].strftime("%Y-%m-%d"),
-                "price": _r(d["close"].iloc[i]),
-                "chg_pct": _r((d["close"].iloc[i] / d["close"].iloc[i - 1] - 1) * 100, 2),
-                **plan.to_dict(),
-            })
-        if plan.action in ("BUY", "WATCH") and plan.setup != "neutral" and i > busy_until:
-            tr = simulate_trade(d, i, plan)
-            if tr:
-                tr.update({"code": code, "setup": plan.setup, "label": plan.label, "signal_date": d["date"].iloc[i].strftime("%Y-%m-%d")})
-                trades.append(tr)
-                busy_until = tr["exit_idx"]
-
-    # Baseline: arbitrary entries (next open) with the SAME exit rules (2 ATR stop, 3 ATR target,
-    # 10-bar time stop), non-overlapping. Answers: does picking these setups beat random timing?
-    base_trades: List[Dict[str, Any]] = []
-    b_busy = -1
-    for i in range(MIN_BARS, n - 1):
-        if i <= b_busy:
-            continue
-        px, a = _f(d["close"].iloc[i]), _f(d["atr14"].iloc[i], 0.0)
-        if not (a > 0):
-            continue
-        gp = Plan("random", "Random entry", "BUY", 0, entry_low=px, entry_high=px, stop=px - 2 * a, target=px + 3 * a)
-        tr = simulate_trade(d, i, gp)
-        if tr:
-            base_trades.append(tr)
-            b_busy = tr["exit_idx"]
-    return {"trades": trades, "daily": daily, "baseline_trades": base_trades,
-            "first_date": d["date"].iloc[MIN_BARS].strftime("%Y-%m-%d") if n > MIN_BARS else None,
-            "last_date": d["date"].iloc[-1].strftime("%Y-%m-%d")}
-
-
-def summarise_trades(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
-    if not trades:
-        return {"n": 0}
-    rs = np.array([t["r"] for t in trades])
-    rets = np.array([t["ret_pct"] for t in trades])
-    wins, losses = rs[rs > 0], rs[rs <= 0]
-    gross_win, gross_loss = wins.sum(), -losses.sum()
-    return {
-        "n": int(len(trades)),
-        "win_rate": float((rs > 0).mean() * 100),
-        "avg_ret": float(rets.mean()),
-        "avg_r": float(rs.mean()),
-        "avg_win_r": float(wins.mean()) if len(wins) else None,
-        "avg_loss_r": float(losses.mean()) if len(losses) else None,
-        "profit_factor": float(gross_win / gross_loss) if gross_loss > 0 else None,
-        "avg_bars": float(np.mean([t["bars"] for t in trades])),
-        "target_hits": int(sum(t["reason"] == "target" for t in trades)),
-        "stop_hits": int(sum(t["reason"] == "stop" for t in trades)),
-        "time_exits": int(sum(t["reason"] == "time" for t in trades)),
-    }
+        out.append({
+            "date": d["date"].iloc[i].strftime("%Y-%m-%d"),
+            "price": _r(d["close"].iloc[i]),
+            "chg_pct": _r((d["close"].iloc[i] / d["close"].iloc[i - 1] - 1) * 100, 2),
+            **plan.to_dict(),
+        })
+    return out
 
 
 # ---------------------------------------------------------------- snapshot pieces
@@ -435,7 +324,7 @@ def market_regime(spy: Dict[str, Any], qqq: Optional[Dict[str, Any]]) -> Dict[st
 
 
 def conviction(score: int, plan: Dict[str, Any], regime: str, earnings_days: Optional[int]) -> Dict[str, Any]:
-    """Adjusted conviction for today's card (regime + earnings), kept separate from the backtested raw plan."""
+    """Adjusted conviction for today's card (regime + earnings), kept separate from the raw plan."""
     s = score
     flags: List[str] = []
     if plan["action"] in ("BUY", "WATCH"):
